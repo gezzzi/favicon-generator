@@ -54,33 +54,19 @@ export async function POST(request: NextRequest) {
     const arrayBuffer = await file.arrayBuffer();
     const inputBuffer = Buffer.from(arrayBuffer);
 
-    // sharpで画像を読み込み、メタデータを取得
+    // sharpで画像を読み込み
     let image = sharp(inputBuffer);
     const metadata = await image.metadata();
+    const originalWidth = metadata.width || 512;
+    const originalHeight = metadata.height || 512;
 
     // SVGの場合はラスタライズ
     if (file.type === "image/svg+xml") {
-      // SVGを十分なサイズでラスタライズ
       image = sharp(inputBuffer, { density: 300 }).resize(1024, 1024, { fit: "inside" });
     }
 
-    // RGBAに変換（透過を確保）
-    image = image.ensureAlpha();
-
-    // 入力画像の処理済みバッファを取得
-    const { data: rawData, info } = await image.raw().toBuffer({ resolveWithObject: true });
-    const { width, height } = info;
-
-    // 角丸半径をクランプ（画像サイズの半分まで）
-    const effectiveRadius = Math.min(radius, Math.floor(Math.min(width, height) / 2));
-
-    // 角丸マスクを適用
-    const processedBuffer = await applyRoundedCorners(rawData, width, height, effectiveRadius);
-
-    // 処理済み画像を作成
-    const processedImage = sharp(processedBuffer, {
-      raw: { width, height, channels: 4 },
-    }).png();
+    // RGBAに変換（透過を確保）し、PNGバッファを取得
+    const baseBuffer = await image.ensureAlpha().png().toBuffer();
 
     // ZIPファイルを作成
     const zip = new JSZip();
@@ -89,16 +75,69 @@ export async function POST(request: NextRequest) {
     const publicFolder = zip.folder("public");
     const appFolder = zip.folder("src/app");
 
+    // 角丸を出力サイズに対する比率で計算するための基準サイズ
+    // プレビューは元画像を最大192pxで表示しているので、それを基準にする
+    const previewBaseSize = Math.min(originalWidth, originalHeight, 192);
+
+    /**
+     * 画像を指定サイズにリサイズし、角丸を適用する
+     */
+    async function resizeAndApplyRoundedCorners(
+      size: number,
+      isOgp: boolean = false
+    ): Promise<Buffer> {
+      let resizedImage: sharp.Sharp;
+      let targetWidth: number;
+      let targetHeight: number;
+
+      if (isOgp) {
+        // OGP画像は1200x630
+        targetWidth = 1200;
+        targetHeight = 630;
+        resizedImage = sharp(baseBuffer).resize(targetWidth, targetHeight, {
+          fit: "contain",
+          background: { r: 0, g: 0, b: 0, alpha: 0 },
+          kernel: sharp.kernel.lanczos3,
+        });
+      } else {
+        targetWidth = size;
+        targetHeight = size;
+        resizedImage = sharp(baseBuffer).resize(size, size, {
+          fit: "cover",
+          kernel: sharp.kernel.lanczos3,
+        });
+      }
+
+      // リサイズ後のバッファを取得
+      const { data: rawData, info } = await resizedImage
+        .ensureAlpha()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+
+      // 角丸半径を出力サイズに合わせてスケール
+      // プレビューでの見た目と一致させるため、比率で計算
+      const scaledRadius = Math.round(radius * (Math.min(targetWidth, targetHeight) / previewBaseSize));
+      const effectiveRadius = Math.min(scaledRadius, Math.floor(Math.min(info.width, info.height) / 2));
+
+      // 角丸を適用
+      const processedBuffer = applyRoundedCorners(rawData, info.width, info.height, effectiveRadius);
+
+      // PNGに変換
+      return sharp(processedBuffer, {
+        raw: { width: info.width, height: info.height, channels: 4 },
+      })
+        .png()
+        .toBuffer();
+    }
+
     // 各サイズのPNGを生成（public/用）
-    const processedBuffer2 = await processedImage.toBuffer();
-    
     for (const [filepath, size] of Object.entries(PUBLIC_SIZES)) {
       const filename = filepath.replace("public/", "");
+      const isOgp = filename === "opengraph-image.png";
       
-      // OGP画像は1200x630の特殊サイズ
-      let resized: Buffer;
-      if (filename === "opengraph-image.png") {
-        resized = await sharp(processedBuffer2)
+      if (isOgp) {
+        // OGP画像は角丸なしで生成（SNSでの表示を考慮）
+        const ogpImage = await sharp(baseBuffer)
           .resize(1200, 630, {
             fit: "contain",
             background: { r: 0, g: 0, b: 0, alpha: 0 },
@@ -106,44 +145,24 @@ export async function POST(request: NextRequest) {
           })
           .png()
           .toBuffer();
+        publicFolder?.file(filename, ogpImage);
       } else {
-        resized = await sharp(processedBuffer2)
-          .resize(size, size, {
-            fit: "cover",
-            kernel: sharp.kernel.lanczos3,
-          })
-          .png()
-          .toBuffer();
+        const resized = await resizeAndApplyRoundedCorners(size, false);
+        publicFolder?.file(filename, resized);
       }
-
-      publicFolder?.file(filename, resized);
     }
 
     // Next.js App Router用ファイルを生成（src/app/用）
     for (const [filepath, size] of Object.entries(APP_SIZES)) {
       const filename = filepath.replace("src/app/", "");
-      const resized = await sharp(processedBuffer2)
-        .resize(size, size, {
-          fit: "cover",
-          kernel: sharp.kernel.lanczos3,
-        })
-        .png()
-        .toBuffer();
-
+      const resized = await resizeAndApplyRoundedCorners(size);
       appFolder?.file(filename, resized);
     }
 
     // ICO用のPNGバッファを生成
     const icoInputBuffers: Buffer[] = [];
     for (const size of ICO_SIZES) {
-      const resized = await sharp(processedBuffer2)
-        .resize(size, size, {
-          fit: "cover",
-          kernel: sharp.kernel.lanczos3,
-        })
-        .png()
-        .toBuffer();
-
+      const resized = await resizeAndApplyRoundedCorners(size);
       icoInputBuffers.push(resized);
     }
 
@@ -173,6 +192,10 @@ export async function POST(request: NextRequest) {
       display: "standalone",
     };
     publicFolder?.file("site.webmanifest", JSON.stringify(manifest, null, 2));
+
+    // 角丸半径の表示用（512pxサイズでの値）
+    const displayRadius = Math.round(radius * (512 / previewBaseSize));
+    const effectiveDisplayRadius = Math.min(displayRadius, 256);
 
     // README.txt を生成
     const readme = `Favicon Generator - Next.js App Router最適化
@@ -246,7 +269,8 @@ export const metadata: Metadata = {
 アプリ名: ${appName}
 短縮名: ${shortName}
 テーマカラー: ${themeColor}
-角丸半径: ${effectiveRadius}px
+角丸半径: ${radius}px（プレビュー基準）
+512pxサイズでの角丸: 約${effectiveDisplayRadius}px
 
 生成日時: ${new Date().toLocaleString("ja-JP")}
 `;
@@ -277,12 +301,12 @@ export const metadata: Metadata = {
  * 角丸マスクを適用する関数
  * 角の外側を透過にする
  */
-async function applyRoundedCorners(
+function applyRoundedCorners(
   data: Buffer,
   width: number,
   height: number,
   radius: number
-): Promise<Buffer> {
+): Buffer {
   if (radius === 0) {
     return data;
   }
@@ -341,4 +365,3 @@ async function applyRoundedCorners(
 
   return result;
 }
-
