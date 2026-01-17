@@ -18,8 +18,9 @@ const PUBLIC_SIZES = {
 
 // Next.js App Router用（src/app/用）
 const APP_SIZES = {
-  "src/app/icon.png": 32,           // ファビコン（自動認識）
+  "src/app/icon.png": 512,           // ファビコン（自動認識）
   "src/app/apple-icon.png": 180,    // Apple Touch Icon（自動認識）
+  "src/app/opengraph-image.png": 1200, // OGP画像（自動認識）
 };
 
 // ICOに含めるサイズ
@@ -155,8 +156,22 @@ export async function POST(request: NextRequest) {
     // Next.js App Router用ファイルを生成（src/app/用）
     for (const [filepath, size] of Object.entries(APP_SIZES)) {
       const filename = filepath.replace("src/app/", "");
-      const resized = await resizeAndApplyRoundedCorners(size);
-      appFolder?.file(filename, resized);
+      const isOgp = filename === "opengraph-image.png";
+      
+      if (isOgp) {
+        const ogpImage = await sharp(baseBuffer)
+          .resize(1200, 630, {
+            fit: "contain",
+            background: { r: 0, g: 0, b: 0, alpha: 0 },
+            kernel: sharp.kernel.lanczos3,
+          })
+          .png()
+          .toBuffer();
+        appFolder?.file(filename, ogpImage);
+      } else {
+        const resized = await resizeAndApplyRoundedCorners(size);
+        appFolder?.file(filename, resized);
+      }
     }
 
     // ICO用のPNGバッファを生成
@@ -175,21 +190,25 @@ export async function POST(request: NextRequest) {
     const manifest = {
       name: appName,
       short_name: shortName,
+      description: `${appName} のファビコン一式`,
+      start_url: "/",
+      display: "standalone",
+      background_color: themeColor,
+      theme_color: themeColor,
       icons: [
         {
           src: "/android-chrome-192x192.png",
           sizes: "192x192",
           type: "image/png",
+          purpose: "any",
         },
         {
           src: "/android-chrome-512x512.png",
           sizes: "512x512",
           type: "image/png",
+          purpose: "any",
         },
       ],
-      theme_color: themeColor,
-      background_color: themeColor,
-      display: "standalone",
     };
     publicFolder?.file("site.webmanifest", JSON.stringify(manifest, null, 2));
 
@@ -204,8 +223,9 @@ export async function POST(request: NextRequest) {
 このZIPには以下のファイルが含まれています：
 
 【src/app/ フォルダ】Next.js App Router用（自動認識）
-- icon.png           : 32x32 ファビコン（自動認識）
+- icon.png           : 512x512 ファビコン（自動認識）
 - apple-icon.png     : 180x180 Apple Touch Icon（自動認識）
+- opengraph-image.png : 1200x630 OGP画像（自動認識）
 - favicon.ico        : マルチサイズICO
 
 【public/ フォルダ】静的ファイル

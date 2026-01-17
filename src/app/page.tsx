@@ -130,21 +130,17 @@ import type { Metadata } from "next";
 export const metadata: Metadata = {
   title: "${name}",
   description: "Your app description",
+  // src/app フォルダの icon.png, apple-icon.png, opengraph-image.png, favicon.ico は
+  // Next.jsによって自動的に認識されるため、ここでの記述は不要ですが、
+  // public/ 内の個別のPNGを指定したい場合は以下のように記述します。
   icons: {
     icon: [
-      { url: "/favicon.ico", sizes: "any" },
       { url: "/favicon-16x16.png", sizes: "16x16", type: "image/png" },
       { url: "/favicon-32x32.png", sizes: "32x32", type: "image/png" },
       { url: "/favicon-48x48.png", sizes: "48x48", type: "image/png" },
     ],
-    apple: [
-      { url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" },
-    ],
   },
   manifest: "/site.webmanifest",
-  openGraph: {
-    images: [{ url: "/opengraph-image.png", width: 1200, height: 630 }],
-  },
   other: {
     "theme-color": "${color}",
     "msapplication-TileColor": "${color}",
@@ -196,8 +192,9 @@ export const metadata: Metadata = {
 
   const nextjsFiles = [
     { name: "src/app/", desc: "App Router用", isFolder: true },
-    { name: "├─ icon.png", desc: "32×32 自動認識ファビコン" },
+    { name: "├─ icon.png", desc: "512×512 自動認識ファビコン" },
     { name: "├─ apple-icon.png", desc: "180×180 自動認識" },
+    { name: "├─ opengraph-image.png", desc: "1200×630 自動認識" },
     { name: "└─ favicon.ico", desc: "マルチサイズICO" },
     { name: "public/", desc: "静的ファイル", isFolder: true },
     { name: "├─ favicon.ico", desc: "16/32/48px マルチサイズ" },
